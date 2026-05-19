@@ -5,9 +5,9 @@
 
 #include "image.h"
 #include "light.h"
-#include "lighting.h"
 #include "material.h"
 #include "ray.h"
+#include "renderer.h"
 #include "scene.h"
 #include "sphere.h"
 #include "types.h"
@@ -22,17 +22,9 @@
 #define IMAGE_HEIGHT 600
 #define FOV 60.0
 
-color3 get_background_color(const scene *s, double t) {
-  color3 color;
-  color.x = (1.0 - t) * s->background_top.x + t * s->background_bottom.x;
-  color.y = (1.0 - t) * s->background_top.y + t * s->background_bottom.y;
-  color.z = (1.0 - t) * s->background_top.z + t * s->background_bottom.z;
-  return color;
-}
-
 int main(void) {
-  printf("SimpleRayTracer - Milestone 4: Phong Lighting\n");
-  printf("Rendering scene with realistic lighting...\n");
+  printf("SimpleRayTracer - Milestone 5: Reflections\n");
+  printf("Rendering scene with mirror reflections...\n");
 
   int width = IMAGE_WIDTH;
   int height = IMAGE_HEIGHT;
@@ -42,48 +34,50 @@ int main(void) {
   scene world;
   scene_init(&world);
 
-  // Add lights to the scene
+  // Add lights
   light main_light =
-      light_create(vec3_create(-5, 5, -5),     // Position (up and to the left)
-                   vec3_create(1.0, 1.0, 1.0), // White light
-                   1.0                         // Full intensity
-      );
+      light_create(vec3_create(-5, 5, -5), vec3_create(1.0, 1.0, 1.0), 1.0);
   scene_add_light(&world, main_light);
 
-  // Optional: Add a second light for more interesting lighting
   light fill_light =
-      light_create(vec3_create(5, 3, -3),      // Position (right side)
-                   vec3_create(0.8, 0.8, 1.0), // Slightly blue tint
-                   0.5                         // Half intensity
-      );
+      light_create(vec3_create(5, 3, -3), vec3_create(0.8, 0.8, 1.0), 0.5);
   scene_add_light(&world, fill_light);
 
   // Add spheres with different materials
-  // Large red shiny sphere in center
-  sphere sph1 = {.center = vec3_create(0, 0, 0),
-                 .radius = 1.0,
-                 .mat = material_shiny(vec3_create(1.0, 0.2, 0.2))};
-  scene_add_sphere(&world, sph1);
 
-  // Green matte sphere on the left
-  sphere sph2 = {.center = vec3_create(-2.5, 0, -1),
-                 .radius = 0.8,
-                 .mat = material_matte(vec3_create(0.2, 1.0, 0.2))};
-  scene_add_sphere(&world, sph2);
+  // Center: Chrome/mirror sphere (highly reflective)
+  sphere mirror_sphere = {
+      .center = vec3_create(0, 0, 0),
+      .radius = 1.0,
+      .mat = material_mirror(vec3_create(0.95, 0.95, 1.0)) // Slightly blue tint
+  };
+  scene_add_sphere(&world, mirror_sphere);
 
-  // Blue metallic sphere on the right
-  sphere sph3 = {.center = vec3_create(2.5, 0, 1),
-                 .radius = 0.8,
-                 .mat = material_metal(vec3_create(0.2, 0.4, 1.0))};
-  scene_add_sphere(&world, sph3);
+  // Left: Matte green sphere (to be reflected)
+  sphere left_sphere = {.center = vec3_create(-2.5, 0, -1),
+                        .radius = 0.8,
+                        .mat = material_matte(vec3_create(0.2, 1.0, 0.2))};
+  scene_add_sphere(&world, left_sphere);
 
-  // Small yellow shiny sphere in front
-  sphere sph4 = {.center = vec3_create(0, -1.5, -2),
-                 .radius = 0.5,
-                 .mat = material_shiny(vec3_create(1.0, 1.0, 0.2))};
-  scene_add_sphere(&world, sph4);
+  // Right: Shiny blue sphere (partially reflective)
+  sphere right_sphere = {.center = vec3_create(2.5, 0, 1),
+                         .radius = 0.8,
+                         .mat = material_shiny(vec3_create(0.2, 0.4, 1.0))};
+  scene_add_sphere(&world, right_sphere);
 
-  // Ground (large matte gray sphere)
+  // Front: Small red metallic sphere
+  sphere front_sphere = {.center = vec3_create(0, -1.3, -2),
+                         .radius = 0.5,
+                         .mat = material_metal(vec3_create(1.0, 0.2, 0.2))};
+  scene_add_sphere(&world, front_sphere);
+
+  // Back: Small yellow shiny sphere
+  sphere back_sphere = {.center = vec3_create(1.5, 1.0, 2),
+                        .radius = 0.6,
+                        .mat = material_shiny(vec3_create(1.0, 1.0, 0.2))};
+  scene_add_sphere(&world, back_sphere);
+
+  // Ground
   sphere ground = {.center = vec3_create(0, -101, 0),
                    .radius = 100,
                    .mat = material_matte(vec3_create(0.5, 0.5, 0.5))};
@@ -112,26 +106,9 @@ int main(void) {
 
       ray r = ray_create(camera_pos, vec3_add(camera_pos, ray_dir));
 
-      // Check for intersections
-      double t;
-      sphere *hit_sphere = NULL;
-
-      if (scene_intersect(&world, &r, &t, &hit_sphere)) {
-        // Hit something! Calculate lighting
-        point3 hit_point = ray_at(r, t);
-        vec3 normal = sphere_normal(hit_sphere, hit_point);
-        vec3 view_dir = vec3_mul(ray_dir, -1.0); // From hit point to camera
-
-        // Calculate Phong lighting
-        color3 pixel_color = calculate_lighting(hit_point, normal, view_dir,
-                                                &hit_sphere->mat, &world);
-
-        pixels[j * width + i] = pixel_color;
-      } else {
-        // No hit - background gradient
-        double t_bg = (double)j / (height - 1);
-        pixels[j * width + i] = get_background_color(&world, t_bg);
-      }
+      // Trace ray with reflections
+      color3 pixel_color = trace_ray(&world, &r, 0);
+      pixels[j * width + i] = pixel_color;
     }
 
     // Progress indicator
@@ -143,10 +120,10 @@ int main(void) {
   printf("Progress: 100%%\n");
 
   // Write image
-  write_ppm("output/lit_scene.ppm", pixels, width, height);
+  write_ppm("output/reflections.ppm", pixels, width, height);
 
   free(pixels);
-  printf("Done! Rendered %d spheres with %d lights\n", world.sphere_count,
-         world.light_count);
+  printf("Done! Rendered %d spheres with reflections (depth=%d)\n",
+         world.sphere_count, MAX_RECURSION_DEPTH);
   return 0;
 }
